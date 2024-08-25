@@ -207,11 +207,11 @@ public class VpnTunnelService extends VpnService {
     }
     final TunnelConfig tunnelConfig = new TunnelConfig();
     tunnelConfig.id = tunnelId;
-    tunnelConfig.proxy = new ShadowsocksConfig();
-    tunnelConfig.proxy.host = config.getString("host");
-    tunnelConfig.proxy.port = config.getInt("port");
-    tunnelConfig.proxy.password = config.getString("password");
-    tunnelConfig.proxy.method = config.getString("method");
+    tunnelConfig.transportConfig = new ShadowsocksConfig();
+    tunnelConfig.transportConfig.host = config.getString("host");
+    tunnelConfig.transportConfig.port = config.getInt("port");
+    tunnelConfig.transportConfig.password = config.getString("password");
+    tunnelConfig.transportConfig.method = config.getString("method");
     // `name` and `prefix` are optional properties.
     try {
       tunnelConfig.name = config.getString("name");
@@ -226,13 +226,13 @@ public class VpnTunnelService extends VpnService {
       // pass
     }
     if (prefix != null) {
-      tunnelConfig.proxy.prefix = new byte[prefix.length()];
+      tunnelConfig.transportConfig.prefix = new byte[prefix.length()];
       for (int i = 0; i < prefix.length(); i++) {
         char c = prefix.charAt(i);
         if ((c & 0xFF) != c) {
           throw new JSONException(String.format("Prefix character '%c' is out of range", c));
         }
-        tunnelConfig.proxy.prefix[i] = (byte)c;
+        tunnelConfig.transportConfig.prefix[i] = (byte)c;
       }
     }
     return tunnelConfig;
@@ -247,7 +247,7 @@ public class VpnTunnelService extends VpnService {
   private synchronized ErrorCode startTunnel(
       final TunnelConfig config, final String serverName, boolean isAutoStart) {
     LOG.info(String.format(Locale.ROOT, "Starting tunnel %s for server %s", config.id, serverName));
-    if (config.id == null || config.proxy == null) {
+    if (config.id == null || config.transportConfig == null) {
       return ErrorCode.ILLEGAL_SERVER_CONFIGURATION;
     }
     final boolean isRestart = tunnelConfig != null;
@@ -263,15 +263,9 @@ public class VpnTunnelService extends VpnService {
       }
     }
 
-    final shadowsocks.Config configCopy = new shadowsocks.Config();
-    configCopy.setHost(config.proxy.host);
-    configCopy.setPort(config.proxy.port);
-    configCopy.setCipherName(config.proxy.method);
-    configCopy.setPassword(config.proxy.password);
-    configCopy.setPrefix(config.proxy.prefix);
     final shadowsocks.Client client;
     try {
-      client = new shadowsocks.Client(configCopy);
+      client = new shadowsocks.NewClientFromJSON(transportConfigToJSON(config.transportConfig));
     } catch (Exception e) {
       LOG.log(Level.WARNING, "Invalid configuration", e);
       tearDownActiveTunnel();
@@ -318,6 +312,31 @@ public class VpnTunnelService extends VpnService {
     startForegroundWithNotification(serverName);
     storeActiveTunnel(config, serverName, remoteUdpForwardingEnabled);
     return ErrorCode.NO_ERROR;
+  }
+
+  // Returns a json format of the given shadowsocks config.
+  private String transportConfigToJSON(final ShadowsocksConfig config) {
+    LOG.info("Storing active tunnel.");
+    JSONObject tunnel = new JSONObject();
+    try {
+      JSONObject jsonConfig = new JSONObject();
+      jsonConfig.put("host", config.transportConfig.host);
+      jsonConfig.put("port", config.transportConfig.port);
+      jsonConfig.put("password", config.transportConfig.password);
+      jsonConfig.put("method", config.transportConfig.method);
+
+      if (config.transportConfig.prefix != null) {
+        char[] chars = new char[config.transportConfig.prefix.length];
+        for (int i = 0; i < config.transportConfig.prefix.length; i++) {
+          // Unsigned bit width extension requires a mask in Java.
+          chars[i] = (char)(config.transportConfig.prefix[i] & 0xFF);
+        }
+        jsonConfig.put("prefix", new String(chars));
+      }
+      return jsonConfig.toString();
+    } catch (JSONException e) {
+      LOG.log(Level.SEVERE, "Failed to create JSON object from transport config", e);
+    }
   }
 
   private synchronized ErrorCode stopTunnel(final String tunnelId) {
@@ -491,16 +510,16 @@ public class VpnTunnelService extends VpnService {
     JSONObject tunnel = new JSONObject();
     try {
       JSONObject proxyConfig = new JSONObject();
-      proxyConfig.put("host", config.proxy.host);
-      proxyConfig.put("port", config.proxy.port);
-      proxyConfig.put("password", config.proxy.password);
-      proxyConfig.put("method", config.proxy.method);
+      proxyConfig.put("host", config.transportConfig.host);
+      proxyConfig.put("port", config.transportConfig.port);
+      proxyConfig.put("password", config.transportConfig.password);
+      proxyConfig.put("method", config.transportConfig.method);
 
-      if (config.proxy.prefix != null) {
-        char[] chars = new char[config.proxy.prefix.length];
-        for (int i = 0; i < config.proxy.prefix.length; i++) {
+      if (config.transportConfig.prefix != null) {
+        char[] chars = new char[config.transportConfig.prefix.length];
+        for (int i = 0; i < config.transportConfig.prefix.length; i++) {
           // Unsigned bit width extension requires a mask in Java.
-          chars[i] = (char)(config.proxy.prefix[i] & 0xFF);
+          chars[i] = (char)(config.transportConfig.prefix[i] & 0xFF);
         }
         proxyConfig.put("prefix", new String(chars));
       }
