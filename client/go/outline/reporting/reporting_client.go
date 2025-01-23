@@ -17,9 +17,11 @@
 package reporting
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/Jigsaw-Code/outline-apps/client/go/outline/connectivity"
@@ -66,6 +68,7 @@ func Report(tcp transport.StreamDialer) (err error) {
 	}
 
 	// Read the response from the server.
+	var response []byte
 	buffer := make([]byte, 4096)
 	for {
 		n, err := conn.Read(buffer)
@@ -75,7 +78,26 @@ func Report(tcp transport.StreamDialer) (err error) {
 			}
 			return fmt.Errorf("failed to read response: %w", err)
 		}
-		fmt.Print(string(buffer[:n]))
+		response = append(response, buffer[:n]...)
+	}
+
+	// Parse the HTTP response to extract cookies.
+	headersEnd := bytes.Index(response, []byte("\r\n\r\n"))
+	if headersEnd == -1 {
+		return fmt.Errorf("failed to find end of headers in response")
+	}
+
+	headers := string(response[:headersEnd])
+	fmt.Println("HTTP Headers:")
+	fmt.Println(headers)
+
+	// Extract cookies from the headers.
+	lines := strings.Split(headers, "\r\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Set-Cookie:") {
+			cookie := strings.TrimPrefix(line, "Set-Cookie: ")
+			fmt.Println("Cookie found:", cookie)
+		}
 	}
 
 	return nil
