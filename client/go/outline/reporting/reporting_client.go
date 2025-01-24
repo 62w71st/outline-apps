@@ -24,6 +24,10 @@ import (
 	"strings"
 	"time"
 
+	"encoding/json"
+	"net/http"
+	"os"
+
 	"github.com/Jigsaw-Code/outline-apps/client/go/outline/connectivity"
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 )
@@ -40,8 +44,15 @@ func CheckTCPConnectivity(tcp transport.StreamDialer) error {
 	return nil
 }
 
-// Start starts reporting.
+const cookiesFile = "cookies.json"
+
 func Report(tcp transport.StreamDialer) (err error) {
+	// Load cookies from file
+	cookies, err := loadCookies()
+	if err != nil {
+		return fmt.Errorf("failed to load cookies: %w", err)
+	}
+
 	// Perform a TCP connectivity check.
 	if err := CheckTCPConnectivity(tcp); err != nil {
 		return fmt.Errorf("TCP connectivity check failed: %w", err)
@@ -57,10 +68,15 @@ func Report(tcp transport.StreamDialer) (err error) {
 	}
 	defer conn.Close()
 
-	// Write an HTTP request to the connection.
+	// Create an HTTP request with cookies
 	request := "GET / HTTP/1.1\r\n" +
 		"Host: example.com\r\n" +
-		"Connection: close\r\n\r\n"
+		"Connection: close\r\n"
+
+	for _, cookie := range cookies {
+		request += fmt.Sprintf("Cookie: %s=%s\r\n", cookie.Name, cookie.Value)
+	}
+	request += "\r\n"
 
 	_, err = conn.Write([]byte(request))
 	if err != nil {
@@ -92,15 +108,58 @@ func Report(tcp transport.StreamDialer) (err error) {
 	fmt.Println(headers)
 
 	// Extract cookies from the headers.
+	var newCookies []*http.Cookie
 	lines := strings.Split(headers, "\r\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "Set-Cookie:") {
 			cookie := strings.TrimPrefix(line, "Set-Cookie: ")
-			fmt.Println("Cookie found:", cookie)
+			parts := strings.SplitN(cookie, ";", 2)
+			if len(parts) > 0 {
+				cookieParts := strings.SplitN(parts[0], "=", 2)
+				if len(cookieParts) == 2 {
+					newCookies = append(newCookies, &http.Cookie{
+						Name:  cookieParts[0],
+						Value: cookieParts[1],
+					})
+					fmt.Println("Cookie found:", cookie)
+				}
+			}
 		}
 	}
 
+	// Save new cookies to file
+	if err := saveCookies(newCookies); err != nil {
+		return fmt.Errorf("failed to save cookies: %w", err)
+	}
+
 	return nil
+}
+
+func loadCookies() ([]*http.Cookie, error) {
+	file, err := os.Open(cookiesFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []*http.Cookie{}, nil
+		}
+		return nil, err
+	}
+	defer file.Close()
+
+	var cookies []*http.Cookie
+	if err := json.NewDecoder(file).Decode(&cookies); err != nil {
+		return nil, err
+	}
+	return cookies, nil
+}
+
+func saveCookies(cookies []*http.Cookie) error {
+	file, err := os.Create(cookiesFile)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	return json.NewEncoder(file).Encode(cookies)
 }
 
 // Time duration constant

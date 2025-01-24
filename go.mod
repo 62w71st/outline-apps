@@ -9,6 +9,7 @@ require (
 	github.com/go-task/task/v3 v3.36.0
 	github.com/google/addlicense v1.1.1
 	github.com/google/go-licenses v1.6.0
+	github.com/google/uuid v1.3.0
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/stretchr/testify v1.9.0
 	golang.org/x/mobile v0.0.0-20241213221354-a87c1cf6cf46

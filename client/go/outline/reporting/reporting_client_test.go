@@ -29,6 +29,7 @@ import (
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
+	"github.com/google/uuid"
 )
 
 var server *http.Server
@@ -36,7 +37,12 @@ var server *http.Server
 func TestReport(t *testing.T) {
 	err := Report(&fakeSSClient{})
 	if err != nil {
-		t.Fatalf("Start failed: %v", err)
+		t.Fatalf("Report failed: %v", err)
+	}
+	// Report againt to get the original cookie.
+	err = Report(&fakeSSClient{})
+	if err != nil {
+		t.Fatalf("Report failed: %v", err)
 	}
 }
 
@@ -151,6 +157,26 @@ func (c *fakeDuplexConn) CloseWrite() error { return nil }
 var _ transport.StreamConn = (*fakeDuplexConn)(nil)
 
 func echoHandler(w http.ResponseWriter, r *http.Request) {
+	// Check if the cookie is already set
+	cookie, err := r.Cookie("client-id")
+	if err != nil {
+		// If the cookie is not set, generate a unique ID and set the cookie
+		if err == http.ErrNoCookie {
+			clientID := uuid.New().String()
+			http.SetCookie(w, &http.Cookie{
+				Name:  "client-id",
+				Value: clientID,
+				Path:  "/",
+			})
+			fmt.Printf("Set new client-id cookie: %s\n", clientID)
+		} else {
+			http.Error(w, "Failed to read cookie", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		fmt.Printf("Existing client-id cookie: %s\n", cookie.Value)
+		http.SetCookie(w, cookie)
+	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
