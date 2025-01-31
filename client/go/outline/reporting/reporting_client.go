@@ -26,6 +26,8 @@ import (
 
 	"encoding/json"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 
 	"github.com/Jigsaw-Code/outline-apps/client/go/outline/connectivity"
@@ -33,7 +35,7 @@ import (
 )
 
 const (
-	testTCPWebsite = "example.com:443"
+	testTCPWebsite = "https://example.com:443"
 )
 
 func CheckTCPConnectivity(tcp transport.StreamDialer) error {
@@ -47,16 +49,28 @@ func CheckTCPConnectivity(tcp transport.StreamDialer) error {
 const cookiesFile = "cookies.json"
 
 func Report(tcp transport.StreamDialer) (err error) {
-	// Load cookies from file
-	cookies, err := loadCookies()
-	if err != nil {
-		return fmt.Errorf("failed to load cookies: %w", err)
-	}
-
 	// Perform a TCP connectivity check.
 	if err := CheckTCPConnectivity(tcp); err != nil {
 		return fmt.Errorf("TCP connectivity check failed: %w", err)
 	}
+
+	// Load cookies from file
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return fmt.Errorf("failed to create cookie jar: %w", err)
+	}
+	var urls []*url.URL
+	urls, err = loadCookies(jar, cookiesFile)
+	if err != nil {
+		return fmt.Errorf("failed to load cookies: %w", err)
+	}
+
+	u, err := url.Parse(testTCPWebsite)
+	if err != nil {
+		return fmt.Errorf("failed to parse URL: %w", err)
+	}
+	cookies := jar.Cookies(u)
+
 	// Create a context with a timeout to avoid indefinite hangs.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -126,40 +140,114 @@ func Report(tcp transport.StreamDialer) (err error) {
 			}
 		}
 	}
-
+	// Check if the URL is already in the list
+	exists := false
+	for _, existingURL := range urls {
+		if existingURL.String() == u.String() {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		urls = append(urls, u)
+	}
+	jar.SetCookies(u, newCookies)
 	// Save new cookies to file
-	if err := saveCookies(newCookies); err != nil {
+	if err := saveCookies(urls, jar, cookiesFile); err != nil {
 		return fmt.Errorf("failed to save cookies: %w", err)
 	}
 
 	return nil
 }
 
-func loadCookies() ([]*http.Cookie, error) {
-	file, err := os.Open(cookiesFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return []*http.Cookie{}, nil
-		}
-		return nil, err
-	}
-	defer file.Close()
-
-	var cookies []*http.Cookie
-	if err := json.NewDecoder(file).Decode(&cookies); err != nil {
-		return nil, err
-	}
-	return cookies, nil
+// CookieData represents the structure for saving cookies, including the URL
+type CookieData struct {
+	URL     string         `json:"url"`
+	Cookies []CookieDetail `json:"cookies"`
 }
 
-func saveCookies(cookies []*http.Cookie) error {
-	file, err := os.Create(cookiesFile)
+type CookieDetail struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Domain string `json:"domain"`
+	Path   string `json:"path"`
+}
+
+func saveCookies(urls []*url.URL, jar http.CookieJar, filename string) error {
+	// Retrieve all cookies from the jar
+	cookieDataMap := make(map[string][]CookieDetail)
+
+	for _, urlObj := range urls {
+		cookies := jar.Cookies(urlObj)
+		var cookieDetails []CookieDetail
+		for _, cookie := range cookies {
+			cookieDetails = append(cookieDetails, CookieDetail{
+				Name:   cookie.Name,
+				Value:  cookie.Value,
+				Domain: cookie.Domain,
+				Path:   cookie.Path,
+			})
+		}
+
+		cookieDataMap[urlObj.String()] = cookieDetails
+	}
+
+	// Save the cookies data to a file
+	file, err := os.Create(filename)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 
-	return json.NewEncoder(file).Encode(cookies)
+	encoder := json.NewEncoder(file)
+	if err := encoder.Encode(cookieDataMap); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func loadCookies(jar http.CookieJar, filename string) ([]*url.URL, error) {
+	// Read cookies from the file
+	file, err := os.Open(filename)
+	if os.IsNotExist(err) {
+		return []*url.URL{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	var cookieDataMap map[string][]CookieDetail
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&cookieDataMap); err != nil {
+		return nil, err
+	}
+
+	var urls []*url.URL
+	// Convert the loaded data back into http.Cookie objects and load them into the jar
+	for urlStr, cookieDetails := range cookieDataMap {
+		parsedURL, err := url.Parse(urlStr)
+		if err != nil {
+			return nil, err
+		}
+
+		var cookies []*http.Cookie
+		for _, c := range cookieDetails {
+			cookies = append(cookies, &http.Cookie{
+				Name:   c.Name,
+				Value:  c.Value,
+				Domain: c.Domain,
+				Path:   c.Path,
+			})
+		}
+
+		// Set the cookies in the jar for the specified URL
+		jar.SetCookies(parsedURL, cookies)
+		urls = append(urls, parsedURL)
+	}
+
+	return urls, nil
 }
 
 // Time duration constant

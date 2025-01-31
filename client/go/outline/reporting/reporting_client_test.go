@@ -29,20 +29,26 @@ import (
 
 	"github.com/Jigsaw-Code/outline-sdk/transport"
 	"github.com/Jigsaw-Code/outline-sdk/transport/shadowsocks"
-	"github.com/google/uuid"
 )
 
+const uniqueClientID = "random_client_id"
+
 var server *http.Server
+var clientCookie string
 
 func TestReport(t *testing.T) {
 	err := Report(&fakeSSClient{})
 	if err != nil {
 		t.Fatalf("Report failed: %v", err)
 	}
-	// Report againt to get the original cookie.
+	// Report again to get the original cookie.
 	err = Report(&fakeSSClient{})
 	if err != nil {
 		t.Fatalf("Report failed: %v", err)
+	}
+	time.Sleep(1 * time.Second) // Give the server a moment to process the request
+	if clientCookie != uniqueClientID {
+		t.Fatalf("Expected client cookie %s, got %s", uniqueClientID, clientCookie)
 	}
 }
 
@@ -162,19 +168,20 @@ func echoHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// If the cookie is not set, generate a unique ID and set the cookie
 		if err == http.ErrNoCookie {
-			clientID := uuid.New().String()
 			http.SetCookie(w, &http.Cookie{
-				Name:  "client-id",
-				Value: clientID,
-				Path:  "/",
+				Name:   "client-id",
+				Domain: "example.com",
+				Value:  uniqueClientID,
+				Path:   "/",
 			})
-			fmt.Printf("Set new client-id cookie: %s\n", clientID)
+			fmt.Printf("Set new client-id cookie: %s\n", uniqueClientID)
 		} else {
 			http.Error(w, "Failed to read cookie", http.StatusInternalServerError)
 			return
 		}
 	} else {
 		fmt.Printf("Existing client-id cookie: %s\n", cookie.Value)
+		clientCookie = cookie.Value
 		http.SetCookie(w, cookie)
 	}
 	body, err := io.ReadAll(r.Body)
